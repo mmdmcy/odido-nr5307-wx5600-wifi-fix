@@ -1,0 +1,8 @@
+# Treat docs as documentation so GitHub's language bar highlights Python.
+*.md linguist-documentation
+*.mdc linguist-documentation
+
+# Make the fix script count as Python (new/small repos can lag on Linguist).
+*.py linguist-detectable=true
+*.py linguist-language=Python
+scripts/** linguist-detectable=true

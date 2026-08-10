@@ -1,0 +1,13 @@
+.env
+*.private.md
+.DS_Store
+__pycache__/
+*.pyc
+.venv/
+venv/
+/tmp/
+*.log
+.idea/
+.vscode/.cursor/
+.cursor/
+.githooks/
