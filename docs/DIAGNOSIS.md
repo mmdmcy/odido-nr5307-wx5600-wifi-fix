@@ -1,6 +1,6 @@
-# Diagnosis notes (sanitized)
+# Diagnosis notes
 
-How the NR5307 + WX5600 iPhone flap was isolated using the local HTTPS API. No personal network identifiers.
+How the NR5307 + WX5600 iPhone flap was isolated using the local HTTPS API.
 
 ## Management surface
 
@@ -80,13 +80,13 @@ repeating about once per minute for the same station, while:
 - Topology shows MAP **R3** controller + **R2** agent (interop smell; not proven root cause alone)
 - DHCP syslog lines for that client fire many times per minute during the flap
 
-When the WX5600 is removed from the mesh, steering pressure drops and the phone stays up—matching user A/B tests.
+When the WX5600 is removed from the mesh, steering pressure drops and the phone stays up.
 
 ## Why band steering + DFS/160 is a bad combo for some iPhones
 
 Band steering wants the phone on 5 GHz. If the phone will not complete BSS transition onto the current 5 GHz BSS (DFS CAC quirks, 160 MHz, PMF/WPA3-transition edge cases, etc.), rejects accumulate. Controllers that escalate from “ask” (11v) to “force” (disassoc) produce exactly the Wi‑Fi ↔ cellular behaviour users report.
 
-Pinning 5 GHz to **non-DFS channel 36 @ 80 MHz** made the observed iPhone **accept** 5 GHz (high PHY rate, stable association, DHCP spam stopped).
+Pinning 5 GHz to **non-DFS channel 36 @ 80 MHz** allowed the affected iPhone to associate on 5 GHz stably (high PHY rate; DHCP renew spam stopped).
 
 ## Apply payload shape (5 GHz)
 

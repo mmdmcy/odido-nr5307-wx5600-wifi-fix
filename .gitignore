@@ -8,6 +8,6 @@ venv/
 /tmp/
 *.log
 .idea/
-.vscode/.cursor/
+.vscode/
 .cursor/
 .githooks/
