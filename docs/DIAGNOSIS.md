@@ -50,7 +50,6 @@ On HTTPS with `RSAPublicKey: None`, the SPA does **not** AES-wrap the login body
 
 | Path | Purpose |
 |------|---------|
-| `GET /cgi-bin/DAL?oid=wifi_easy_mesh` | EasyMesh on/off, controller role |
 | `GET /cgi-bin/DAL?oid=wlan` | SSIDs, channel, bandwidth, security |
 | `GET /cgi-bin/DAL?oid=wifi_others&DalGetOneObject=y&Index=5` | 5 GHz “others” (incl. DFS inactive list) |
 | `GET /cgi-bin/DAL?oid=lanhosts` | Clients: band, connected AP, RSSI, active |
@@ -58,9 +57,17 @@ On HTTPS with `RSAPublicKey: None`, the SPA does **not** AES-wrap the login body
 | `GET /cgi-bin/WLANTable_handle` | Station tables + EasyMesh topology |
 | `GET /cgi-bin/Wireless?oid=RDM_OID_WIFI_QSTEER` | QSTEER enable (was off in the observed case) |
 | `GET /cgi-bin/DAL?oid=logset` | Syslog category toggles |
-| `GET /cgi-bin/Log?action=GET_LOG&oid=RDM_OID_LOG_CLASSIFY&iid=[1,0,0,0,0,0]` | System log lines |
+| `GET /cgi-bin/Log?action=GET_LOG&oid=RDM_OID_LOG_CLASSIFY&iid=[1,0,0,0,0,0]` | System log lines (often DHCP-heavy) |
+| `GET /cgi-bin/DAL?oid=wifi_easy_mesh` | `EasyMeshEnable`, `Controller_mode`, `CurRole` (PUT to toggle mesh) |
+| `GET /cgi-bin/DAL?oid=one_connect` | ONE Connect flag (was **on**; not the same as QSTEER) |
+| `GET /cgi-bin/DAL?oid=cellwan_status` | 5G/LTE status, RSRP/SINR, NSA / SCC (WAN vs Wi‑Fi) |
+| `GET /cgi-bin/DAL?oid=status` | Uptime, WAN/LAN, cellular summary |
 
-WX5600 on the LAN also answers `GET /getBasicInformation` (model `WX5600-T0`).
+`lanhosts` is nested: `Object[0].lanhosts[]` (not a top-level list of stations). `Active` on a mesh agent can stay true after unplug until the lease ages; trust `WLANTable_handle` station tables and `SteeringStatus_handle` → `result_ext` (empty when the punt is really gone).
+
+WX5600 on the LAN also answers `GET /getBasicInformation` (model `WX5600-T0`). Its admin password is not necessarily the NR5307’s.
+
+SPA JS (`/static/js/app.js`) EasyMesh apply: PUT `{EasyMeshEnable, Controller_mode, BH_band}` then ~40 s sleep then `WlCheck`. `OneSsidDisabled` is tied to `EasyMeshEnable` (cannot split SSIDs while mesh is on). Some builds also expose `bandstreeringEnable` on the mesh object; it was **absent** on the GET used here.
 
 ---
 
@@ -84,7 +91,7 @@ repeating about once per minute for the same station, while:
 - Topology shows MAP **R3** controller + **R2** agent (interop smell; not proven root cause alone)
 - DHCP syslog lines for that client fire many times per minute during the flap
 
-When the WX5600 is removed from the mesh, steering pressure drops and the phone stays up.
+When the WX5600 is removed from the mesh, **mode B** stops. Gateway **2.4 → 5** 11v can continue if the client stays on 2.4 (see mode A′).
 
 ### Why band steering + DFS/160 is a bad combo for some iPhones
 
@@ -149,51 +156,59 @@ Zyxel’s own Mesh help text states MPro Mesh / EasyMesh includes **AP steering*
 
 ---
 
-## Candidate solutions for mode B (research only — not applied here)
+## Failure mode A′ — gateway 2.4 → 5 after the channel pin (punt optional)
 
-Ordered from least to most invasive. None of these has been validated on this setup yet.
+Observed **2026-08-14** with mode A still in place (5 GHz **ch 36 / 80 MHz**, auto off) and the **WX5600 unplugged** (`result_ext: []`, punt gone from station tables).
 
-### 1. Wait for Odido firmware
+Same 11v **Reject** / **Timeout** pattern as mode A, but 5 GHz is already joinable:
 
-Odido community staff have acknowledged that current NR5307 firmware steers devices onto 2.4 GHz **too aggressively**, and that a newer build improves this but was “not quite ready” at the time of those posts. Example thread: [NR5307 band-steering keeps my TV off 5GHz](https://community.odido.nl/klik-klaar-592/nr5307-band-steering-keeps-my-tv-off-5ghz-band-372278).
+```text
+steer: 11v
+from: <gateway-2.4-bssid>
+to:   <gateway-5-bssid>
+result: Reject | Timeout
+```
 
-This is the only option that keeps full EasyMesh + single SSID **and** addresses the vendor policy. Trade-off: timeline is ISP-controlled.
+- Dual-band iPhone stuck on **gateway 2.4 GHz** (even in the same room as the NR5307).
+- `support11v: YES`; after enough rejects `steer_status` becomes **`UNFRIENDLY`** (controller likely escalates from 11v ask to drop/disassoc).
+- `lanhosts` / steering / `WLANTable_handle` can **disagree** during the flap (one says 5 GHz, one says 2.4, radio table has neither) — that is the glitch, not a measurement bug.
+- DHCP “add” spam many times per minute for that station.
+- A second iPhone **already on gateway 5 GHz** stays quiet (nothing to steer). Same model class; different **latch band**. The 5 GHz phone is not immune: it showed mode **B** Rejects whenever it was on the punt.
 
-### 2. Disable EasyMesh, then split 2.4 / 5 SSIDs
+Airplane Mode next to the gateway often **fails** once the client is UNFRIENDLY or iOS prefers 2.4 on the **shared** SSID.
 
-Documented pattern on other ISP-branded Zyxel boxes (and Odido community tips):
+Unplugging the punt therefore:
 
-1. Network → Wireless → **MESH / EasyMesh** → **Off**
-2. Untick **keep 2.4 and 5 the same**
-3. Give bands different SSIDs (e.g. `Home` / `Home-5G`)
-4. Put phones on the 5 GHz SSID only; leave IoT on 2.4
+- Stops mode **B** (no extender BSSIDs).
+- Does **not** stop mode **A′**.
+- Removes downstairs coverage (WX5600 is not a standalone AP).
 
-**Pros:** Stops EasyMesh band steering; lets you force phones onto 5 GHz.  
-**Cons:** Breaks (or changes) how the WX5600 is managed as a mesh agent; may need re-pairing / wired AP mode / coverage redesign. Highest risk to “it just works” whole-home Wi‑Fi.
+`lanhosts` may still list the WX5600 as `Active` for a while (stale lease). Confirm with station tables + empty `result_ext`.
 
-### 3. Keep NR5307 as modem-only; third-party mesh/AP
+---
 
-Odido users who stay unhappy with onboard Wi‑Fi often: disable Wi‑Fi on the NR5307 (or ignore it), Ethernet to a Deco / UniFi / etc. mesh.  
-**Pros:** Escapes Odido steering entirely.  
-**Cons:** Extra hardware; not a “settings tweak”.
+## Candidate solutions (research — EasyMesh off / third-party mesh **not applied**)
 
-### 4. WX5600 placement / backhaul quality
+See [OPTIONS.md](OPTIONS.md) for the full write-up (Odido ticket, EasyMesh off + split SSID, third-party AP-mode mesh without a floor cable, Switch 1 / 2.4-only, 5G WAN vs Wi‑Fi).
 
-Mode B showed weak ~−70 dBm on extender 5 GHz. Better punt placement (or **wired Ethernet backhaul** to the WX5600 if cabling exists) can raise 5 GHz RSSI so the controller stops preferring 2.4 — *if* the trigger is purely RSSI. Unproven; does not remove aggressive steering code.
+Short version:
 
-### 5. Soft experiments (low confidence)
-
-- Try another non-DFS 5 GHz channel (40 / 44 / 48) if 36 is crowded downstairs  
-- Lower 2.4 GHz TX power so 2.4 looks worse than weak 5 GHz (speculative; can hurt IoT)  
-- Client Airplane Mode / forget-and-rejoin (temporary only)
-
-These do **not** remove the steering engine.
+| Approach | Stops 11v kicks | Keeps WX5600 downstairs | Applied here |
+|----------|-----------------|-------------------------|--------------|
+| Odido firmware | If they ship it | Yes | No |
+| EasyMesh off + split 2.4/5 SSIDs | Yes (high confidence; Odido: Mesh **is** band steering) | **No** | **No** |
+| Third-party 2-pack, AP mode, Odido Wi‑Fi off | Yes | No (punt unplugged) | No |
+| Unplug WX5600 only | Mode B only | No | User-tested: punt loop gone, A′ remained |
+| Airplane Mode | Temporary | n/a | Insufficient when UNFRIENDLY |
 
 ### What not to do first
 
 - Factory-reset the WX5600  
 - Publish PSKs, serials, or full client MAC lists  
-- Assume mode A’s channel pin “failed” — check `SteeringStatus_handle` direction (`from`/`to` BSSIDs) before changing channel again
+- Assume mode A’s channel pin “failed” — check `SteeringStatus_handle` direction (`from`/`to` BSSIDs) before changing channel again  
+- Flash OpenWrt on ISP-loaned NR5307 / WX5600  
+- Enable IP passthrough / “supervisor” tricks for this problem (dumb AP does not need bridge mode)  
+- Run EasyMesh and a third-party mesh on the same SSID at once
 
 ---
 
